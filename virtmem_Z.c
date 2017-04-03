@@ -11,9 +11,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define LOG(var) fprintf(stderr,"[LOG] %s:%d  :: %s\n",__func__,__LINE__, var);
-//#define LOG(var) ;
-
 /*
  * Some compile-time constants.
  */
@@ -40,28 +37,16 @@ int output_report(void);
 long resolve_address(long, int);
 void error_resolve_address(long, int);
 
-long FIFO(long, long);
-long LRU(long);
-long CLOCK(long);
-
-/* Amanda stuff */
-void print(const char*);
-long update_table(int frame, long page, long offset, int* swap);
-long debug_last_mod = 0;
-
-
 
 /*
  * Variables used to keep track of the number of memory-system events
  * that are simulated.
  */
-int page_faults = 0;  /* Page does not exist in page table*/
+int page_faults = 0;
 int mem_refs    = 0;
-int swap_outs   = 0;  /* Replace an existing page entry with your own*/
-int swap_ins    = 0;  /* Place a page entry in a free slot */
+int swap_outs   = 0;
+int swap_ins    = 0;
 
-/*position of the 'oldest' item in page_table, used for FIFO */
-int oldest = 0;
 
 /*
  * Page-table information. You may want to modify this in order to
@@ -69,10 +54,10 @@ int oldest = 0;
  * do so.
  */
 struct page_table_entry *page_table = NULL;
+
 struct page_table_entry {
     long page_num;
     int dirty;
-    int modified;
     int free;
 };
 
@@ -99,8 +84,6 @@ int page_replacement_scheme = REPLACE_NONE;
 
 long resolve_address(long logical, int memwrite)
 {
-    char outbuff[200];
-
     int i;
     long page, frame;
     long offset;
@@ -110,20 +93,13 @@ long resolve_address(long logical, int memwrite)
     /* Get the page and offset */
     page = (logical >> size_of_frame);
 
-    sprintf(outbuff,"Program address 0x%08lx : VPN = 0x%08lx (using framesize = %d)",logical,page,size_of_frame);
-    LOG(outbuff);
-
     for (i=0; i<size_of_frame; i++) {
         mask = mask << 1;
         mask |= 1;
     }
     offset = logical & mask;
 
-    sprintf(outbuff,"Apply 0x%08lx to 0x%08lx to get offset = 0x%08lx", mask, logical, offset);
-    LOG(outbuff);
-
     /* Find page in the inverted page table. */
-    LOG("Does the VM have the page?");
     frame = -1;
     for ( i = 0; i < size_of_memory; i++ ) {
         if (!page_table[i].free && page_table[i].page_num == page) {
@@ -135,21 +111,14 @@ long resolve_address(long logical, int memwrite)
     /* If frame is not -1, then we can successfully resolve the
      * address and return the result. */
     if (frame != -1) {
-        sprintf(outbuff, "--> Yes! Best case scenario, page is in the page_table @ frame=%ld", frame);
-        LOG(outbuff);
-
         effective = (frame << size_of_frame) | offset;
-
-        sprintf(outbuff,"==> Physical address for page 0x%08lx = 0x%ld:%ld = 0x%08lx", page, frame, offset, effective);
-        LOG(outbuff);
         return effective;
     }
 
+
     /* If we reach this point, there was a page fault. Find
      * a free frame. */
-    LOG("Damn it, page fault ... any free frames?");
     page_faults++;
-
 
     for ( i = 0; i < size_of_memory; i++) {
         if (page_table[i].free) {
@@ -158,106 +127,22 @@ long resolve_address(long logical, int memwrite)
         }
     }
 
-
     /* If we found a free frame, then patch up the
      * page table entry and compute the effective
      * address. Otherwise return -1.
      */
     if (frame != -1) {
-        //don't increment swap_ins on first fault
-        sprintf(outbuff, "--> Yes! Found a free frame, page is in the page_table @ frame=%ld", frame);
-        LOG(outbuff);
-
         page_table[frame].page_num = page;
         page_table[i].free = FALSE;
         swap_ins++;
         effective = (frame << size_of_frame) | offset;
-
-        sprintf(outbuff,"==> Physical address for page 0x%08lx = 0x%ld:%ld = 0x%08lx", page, frame, offset, effective);
-        LOG(outbuff);
         return effective;
     } else {
-
-        LOG("Ugh !?# There's nothing free, let's find a victim.");
-        LOG("Here is where you need to apply your page replacement scheme.");
-
-        switch (page_replacement_scheme) {
-          case REPLACE_FIFO:
-            return( FIFO(page, offset) );
-
-          case REPLACE_LRU:
-            return( LRU(page) );
-
-          case REPLACE_CLOCK:
-            return( CLOCK(page) );
-
-          default:
-            printf("How the fuck did we get here... \n");
-            return -1;
-        }
+        return -1;
     }
 }
 
-long FIFO(long page, long offset) {
-  long effective;
 
-  page_table[oldest].page_num = page; //Replace oldest value in page_table with new page.
-  page_table[oldest].free = FALSE;  //Make sure its not free, never should be the case but incase.
-  effective = (oldest << size_of_frame) | offset;
-  oldest = (oldest + 1)%size_of_memory; //Oldest is now next spot in the page_table, update it.
-  swap_outs++;  //Just replaced an existing page aka, swap_out.
-
-  return(effective);
-
-
-}
-
-long LRU(long page) {
-  long effective = 0;
-
-  return(effective);
-
-}
-
-long CLOCK(long page) {
-  long effective = 0;
-
-  return(effective);
-
-}
-
-void print(const char* instruction) {
-    int frame;
-    long page_num;
-    int dirty;
-    int modified;
-    int free;
-
-    fprintf(stderr, "-------------------------------------------------------------\n");
-    fprintf(stderr, "%s   mem_refs: %d  page_faults: %d  swap_ins: %d  swap_outs: %d\n\n",
-            instruction,mem_refs, page_faults, swap_ins, swap_outs);
-    fprintf(stderr, "FRAME\t|PAGE\t\t|MOD\t|DIRTY\t\n");
-    fprintf(stderr, "-------------------------------------------------------------\n");
-    for ( frame = 0; frame < size_of_memory; frame++) {
-        free = page_table[frame].free;
-        modified = page_table[frame].modified;
-        page_num = page_table[frame].page_num;
-        dirty = page_table[frame].dirty;
-        char* updated = "";
-
-        if(debug_last_mod == frame)
-            updated = "<-";
-
-        if(free)
-            fprintf(stderr, "%d\t|FREE\t\t|%d\t|%d\t%s\n", frame, modified, dirty,updated);
-        else
-            fprintf(stderr," %d\t|0x%lx\t|%d\t|%d\t%s\n", frame, page_num, modified, dirty,updated);
-    }
-    fprintf(stderr, "-------------------------------------------------------------\n");
-    fflush(stderr);
-}
-
-/* End AMANDA */
 
 /*
  * Super-simple progress bar.
@@ -291,8 +176,6 @@ int setup()
 {
     int i;
 
-    LOG("Setting up page table (which is the page_table_entry struct) ...");
-
     page_table = (struct page_table_entry *)malloc(
         sizeof(struct page_table_entry) * size_of_memory
     );
@@ -302,8 +185,6 @@ int setup()
             "Simulator error: cannot allocate memory for page table.\n");
         exit(1);
     }
-
-    LOG("Labelling every page entry as FREE ...");
 
     for (i=0; i<size_of_memory; i++) {
         page_table[i].free = TRUE;
@@ -414,16 +295,13 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+
     setup();
 
     while (fgets(buffer, MAX_LINE_LEN-1, infile)) {
         line_num++;
         if (strstr(buffer, ":")) {
-
             sscanf(buffer, "%c: %lx", &addr_type, &addr);
-
-            LOG(buffer);
-
             if (addr_type == 'W') {
                 is_write = TRUE;
             } else {
@@ -434,8 +312,6 @@ int main(int argc, char **argv)
                 error_resolve_address(addr, line_num);
             }
             mem_refs++;
-
-            print(buffer);
         }
 
         if (show_progress) {
