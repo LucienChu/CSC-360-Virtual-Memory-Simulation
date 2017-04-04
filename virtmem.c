@@ -30,6 +30,8 @@
 #define PROGRESS_BAR_WIDTH 60
 #define MAX_LINE_LEN 100
 
+#define MAX_INT_64 9223372036854775807
+
 
 /*
  * Some function prototypes to keep the compiler happy.
@@ -40,7 +42,7 @@ int output_report(void);
 long resolve_address(long, int);
 void error_resolve_address(long, int);
 
-long FIFO(long, long);
+long FIFO(long);
 long LRU(long);
 long CLOCK(long);
 
@@ -62,6 +64,8 @@ int swap_ins    = 0;  /* Place a page entry in a free slot */
 
 /*position of the 'oldest' item in page_table, used for FIFO */
 int oldest = 0;
+long curr_time = 0;
+long clock_hand = 0;
 
 /*
  * Page-table information. You may want to modify this in order to
@@ -74,6 +78,7 @@ struct page_table_entry {
     int dirty;
     int modified;
     int free;
+    long time;
 };
 
 
@@ -139,6 +144,11 @@ long resolve_address(long logical, int memwrite)
         LOG(outbuff);
 
         effective = (frame << size_of_frame) | offset;
+        page_table[frame].time = curr_time;
+        page_table[frame].dirty = 1;
+        if(page_replacement_scheme == REPLACE_CLOCK | page_replacement_scheme == REPLACE_LRU) {
+         swap_ins++;
+        }
 
         sprintf(outbuff,"==> Physical address for page 0x%08lx = 0x%ld:%ld = 0x%08lx", page, frame, offset, effective);
         LOG(outbuff);
@@ -170,7 +180,8 @@ long resolve_address(long logical, int memwrite)
 
         page_table[frame].page_num = page;
         page_table[i].free = FALSE;
-        swap_ins++;
+        page_table[frame].time = curr_time;
+        page_table[frame].dirty = 1;
         effective = (frame << size_of_frame) | offset;
 
         sprintf(outbuff,"==> Physical address for page 0x%08lx = 0x%ld:%ld = 0x%08lx", page, frame, offset, effective);
@@ -181,48 +192,71 @@ long resolve_address(long logical, int memwrite)
         LOG("Ugh !?# There's nothing free, let's find a victim.");
         LOG("Here is where you need to apply your page replacement scheme.");
 
+        swap_outs++;  //Have to replace an existing page aka, swap_out.
+
         switch (page_replacement_scheme) {
           case REPLACE_FIFO:
-            return( FIFO(page, offset) );
+            frame = FIFO(page);
+            swap_ins++;
+            break;
 
           case REPLACE_LRU:
-            return( LRU(page) );
+            swap_ins++;
+            frame = LRU(page);
+            break;
 
           case REPLACE_CLOCK:
-            return( CLOCK(page) );
-
+            frame = CLOCK(page);
+            break;
+              
           default:
-            printf("How the fuck did we get here... \n");
             return -1;
         }
+        return((frame << size_of_frame) | offset);
     }
 }
 
-long FIFO(long page, long offset) {
-  long effective;
+long FIFO(long page) {
+  long frame = oldest;
 
   page_table[oldest].page_num = page; //Replace oldest value in page_table with new page.
-  page_table[oldest].free = FALSE;  //Make sure its not free, never should be the case but incase.
-  effective = (oldest << size_of_frame) | offset;
   oldest = (oldest + 1)%size_of_memory; //Oldest is now next spot in the page_table, update it.
-  swap_outs++;  //Just replaced an existing page aka, swap_out.
-
-  return(effective);
-
-
+  return(frame);
 }
 
 long LRU(long page) {
-  long effective = 0;
+  long lru_frame = 0;
+  long min_time = MAX_INT_64;
+  int i;
 
-  return(effective);
+  for ( i = 0; i < size_of_memory; i++) { //Loop till find frame with lowest time.
+      if (page_table[i].time < min_time) {
+          lru_frame = i;
+          min_time = page_table[i].time;
+      }
+  }
+
+  page_table[lru_frame].page_num = page; //Replace least used value in page_table with new page.
+  page_table[lru_frame].time = curr_time; //Set time of new page to the current time.
+
+  return(lru_frame);
 
 }
 
 long CLOCK(long page) {
-  long effective = 0;
 
-  return(effective);
+  while(TRUE) { //Keep going till you find a 0 dirty bit.
+    if(page_table[clock_hand].dirty == 1) {
+      page_table[clock_hand].dirty = 0; //Set all 1's to 0's
+      clock_hand = (clock_hand + 1)%size_of_memory; //Increment clock_hand, mod to wrap around
+      swap_ins++;
+    } else { break; } //Found 0 dirty bit
+  }
+
+  page_table[clock_hand].page_num = page; //Insert new page
+  page_table[clock_hand].dirty = 1;
+
+  return(clock_hand);
 
 }
 
@@ -434,7 +468,7 @@ int main(int argc, char **argv)
                 error_resolve_address(addr, line_num);
             }
             mem_refs++;
-
+            curr_time++;
             print(buffer);
         }
 
